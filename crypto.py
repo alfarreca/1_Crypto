@@ -15,7 +15,12 @@ st.set_page_config(
 
 # API configuration
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
-DEFAULT_COINS = ["bitcoin", "ethereum", "solana", "cardano", "ripple"]
+DEFAULT_COINS = [
+    "bitcoin", "ethereum", "solana", "pepe", "dogwifhat", "fetch-ai", "arweave",
+    "fantom", "the-graph", "sui", "sei-network", "arbitrum", "optimism", "near",
+    "avalanche", "polygon", "chainlink", "cosmos", "polkadot", "uniswap"
+]
+
 DEFAULT_CURRENCY = "usd"
 
 # Cache data to prevent excessive API calls
