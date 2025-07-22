@@ -19,6 +19,7 @@ else:
     
     with tab1:
         # ... [Keep all your existing price tracking code here] ...
+        pass
     
     with tab2:
         st.header("📊 Momentum Analysis")
