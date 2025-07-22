@@ -287,10 +287,11 @@ else:
     else:
         st.warning("Could not load current market data. Please try again later.")
 
-# Corrected footer
+# Footer
 st.markdown("---")
 st.markdown(
     """
     **Data Source:** [CoinGecko API](https://www.coingecko.com/en/api)  
     **Last Updated:** {}
     """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+)
