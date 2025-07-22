@@ -29,21 +29,25 @@ def get_coin_list():
         st.error(f"Error fetching coin list: {e}")
         return []
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=180)
 def get_market_data(coin_ids, currency):
     try:
-        ids = ",".join(coin_ids)
-        response = requests.get(
-            f"{COINGECKO_API_URL}/coins/markets",
-            params={
-                "vs_currency": currency,
-                "ids": ids,
-                "order": "market_cap_desc",
-                "price_change_percentage": "1h,24h,7d"
-            }
-        )
-        response.raise_for_status()
-        return response.json()
+        results = []
+        for i in range(0, len(coin_ids), 10):  # batch size = 10
+            ids = ",".join(coin_ids[i:i + 10])
+            response = requests.get(
+                f"{COINGECKO_API_URL}/coins/markets",
+                params={
+                    "vs_currency": currency,
+                    "ids": ids,
+                    "order": "market_cap_desc",
+                    "price_change_percentage": "1h,24h,7d"
+                }
+            )
+            response.raise_for_status()
+            results.extend(response.json())
+            time.sleep(1)  # optional: helps prevent rate limit
+        return results
     except requests.exceptions.RequestException as e:
         st.error(f"Error fetching market data: {e}")
         return []
@@ -205,6 +209,9 @@ with st.sidebar:
 if not st.session_state.watchlist:
     st.warning("Your watchlist is empty. Add some cryptocurrencies from the sidebar.")
 else:
+    if len(st.session_state.watchlist) > 15:
+        st.warning("⚠️ You have more than 15 coins in your watchlist. Requests are split in batches to avoid CoinGecko rate limits. This may slow loading.")
+
     market_data = get_market_data(st.session_state.watchlist, st.session_state.currency)
 
     if market_data:
