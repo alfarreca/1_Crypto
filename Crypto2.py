@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import io
+import random
 
 # App configuration
 st.set_page_config(
@@ -31,26 +32,42 @@ def get_coin_list():
 
 @st.cache_data(ttl=180)
 def get_market_data(coin_ids, currency):
-    try:
-        results = []
-        for i in range(0, len(coin_ids), 10):  # batch size = 10
-            ids = ",".join(coin_ids[i:i + 10])
-            response = requests.get(
-                f"{COINGECKO_API_URL}/coins/markets",
-                params={
-                    "vs_currency": currency,
-                    "ids": ids,
-                    "order": "market_cap_desc",
-                    "price_change_percentage": "1h,24h,7d"
-                }
-            )
-            response.raise_for_status()
-            results.extend(response.json())
-            time.sleep(1)  # optional: helps prevent rate limit
-        return results
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching market data: {e}")
+    results = []
+
+    def fetch_batch(ids):
+        for attempt in range(3):  # Retry up to 3 times
+            try:
+                response = requests.get(
+                    f"{COINGECKO_API_URL}/coins/markets",
+                    params={
+                        "vs_currency": currency,
+                        "ids": ",".join(ids),
+                        "order": "market_cap_desc",
+                        "price_change_percentage": "1h,24h,7d"
+                    },
+                    timeout=10
+                )
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.HTTPError as e:
+                if response.status_code == 429:
+                    wait = 2 ** attempt + random.random()
+                    st.warning(f"Rate limit hit. Retrying in {wait:.1f}s...")
+                    time.sleep(wait)
+                else:
+                    raise e
+            except Exception as e:
+                st.error(f"Unexpected error: {e}")
+                return []
+        st.error("Failed to fetch after 3 retries.")
         return []
+
+    for i in range(0, len(coin_ids), 8):  # smaller batches = safer
+        batch = coin_ids[i:i + 8]
+        results.extend(fetch_batch(batch))
+        time.sleep(1.5)  # pause between batches
+
+    return results
 
 @st.cache_data(ttl=300)
 def get_historical_data(coin_id, currency, days):
@@ -210,7 +227,7 @@ if not st.session_state.watchlist:
     st.warning("Your watchlist is empty. Add some cryptocurrencies from the sidebar.")
 else:
     if len(st.session_state.watchlist) > 15:
-        st.warning("⚠️ You have more than 15 coins in your watchlist. Requests are split in batches to avoid CoinGecko rate limits. This may slow loading.")
+        st.warning("⚠️ You have more than 15 coins in your watchlist. Requests are batched with retry logic to avoid rate limits. This may slow loading.")
 
     market_data = get_market_data(st.session_state.watchlist, st.session_state.currency)
 
@@ -239,7 +256,6 @@ else:
                 return ""
 
         styled_df = df.style.applymap(color_change, subset=['1h', '24h', '7d'])
-
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
         st.subheader("Price History")
