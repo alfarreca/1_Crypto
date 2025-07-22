@@ -87,7 +87,7 @@ else:
                     x=df.index, y=df['rsi'],
                     name='RSI',
                     line=dict(color='blue', width=2)
-                )
+                ))  # Fixed: closed the parenthesis here
                 fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", 
                                  annotation_text="Overbought", annotation_position="bottom right")
                 fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", 
