@@ -145,6 +145,7 @@ with st.sidebar:
         "Select Currency",
         currencies,
         index=currencies.index(st.session_state.currency)
+    )
     
     # Watchlist management
     st.subheader("Manage Watchlist")
@@ -208,7 +209,7 @@ with st.sidebar:
                 time.sleep(1)
                 st.rerun()
 
-# Main content (same as before)
+# Main content
 if not st.session_state.watchlist:
     st.warning("Your watchlist is empty. Add some cryptocurrencies from the sidebar.")
 else:
@@ -308,4 +309,3 @@ st.markdown(
     **Data Source:** [CoinGecko API](https://www.coingecko.com/en/api)  
     **Last Updated:** {}
     """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-)
