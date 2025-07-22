@@ -211,6 +211,7 @@ if uploaded_file is not None:
                             hovermode="x unified",
                             showlegend=False,
                             margin=dict(t=50, b=50)
+                        )
                         
                         fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
                         if crypto['RSI (14)']:
@@ -242,6 +243,7 @@ if uploaded_file is not None:
                                 title="MACD Indicator",
                                 hovermode="x unified",
                                 margin=dict(t=50, b=50)
+                            )
                             st.plotly_chart(macd_fig, use_container_width=True)
             
             else:
