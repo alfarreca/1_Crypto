@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import requests
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import numpy as np
 from io import BytesIO
 from ta.momentum import RSIIndicator
@@ -77,7 +78,7 @@ def get_crypto_data(symbols, days):
                     
                     # Momentum score (custom calculation)
                     price_change_1d = ((current_data['quote']['USD']['price'] - historical_prices[-1]) / historical_prices[-1]) * 100
-                    price_change_7d = ((current_data['quote']['USD']['price'] - historical_prices[-7]) / historical_prices[-7]) * 100
+                    price_change_7d = ((current_data['quote']['USD']['price'] - historical_prices[-7]) / historical_prices[-7]) * 100 if len(historical_prices) >= 7 else 0
                     price_change_30d = ((current_data['quote']['USD']['price'] - historical_prices[-min(30, len(historical_prices))]) / historical_prices[-min(30, len(historical_prices))]) * 100
                     
                     momentum_score = 0.4 * price_change_1d + 0.3 * price_change_7d + 0.3 * price_change_30d
@@ -108,25 +109,6 @@ def get_crypto_data(symbols, days):
     
     return crypto_data
 
-# Function to calculate technical indicators
-def calculate_technical_indicators(prices):
-    if len(prices) < 14:
-        return None, None, None
-    
-    # Convert to pandas Series
-    price_series = pd.Series(prices)
-    
-    # Calculate RSI
-    rsi_indicator = RSIIndicator(price_series, window=14)
-    rsi = rsi_indicator.rsi().iloc[-1]
-    
-    # Calculate MACD
-    macd_indicator = MACD(price_series)
-    macd = macd_indicator.macd().iloc[-1]
-    macd_signal = macd_indicator.macd_signal().iloc[-1]
-    
-    return rsi, macd, macd_signal
-
 # Main app logic
 if uploaded_file is not None:
     try:
@@ -154,6 +136,7 @@ if uploaded_file is not None:
                     '7d Change (%)': f"{crypto['7d Change (%)']:.2f}%",
                     'RSI (14)': f"{crypto['RSI (14)']:.2f}" if crypto['RSI (14)'] else "N/A",
                     'MACD': f"{crypto['MACD']:.4f}" if crypto['MACD'] else "N/A",
+                    'MACD Signal': f"{crypto['MACD Signal']:.4f}" if crypto['MACD Signal'] else "N/A",
                     'Momentum Score': f"{crypto['Momentum Score']:.2f}" if crypto['Momentum Score'] else "N/A"
                 })
             
@@ -192,40 +175,83 @@ if uploaded_file is not None:
                         st.write(f"**Momentum Score:** {crypto['Momentum Score']:.2f}")
                 
                 with col2:
-                    # Price chart
-                    fig, ax1 = plt.subplots(figsize=(10, 4))
+                    # Create price chart with RSI
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                     vertical_spacing=0.05, 
+                                     row_heights=[0.7, 0.3])
                     
-                    # Plot price
-                    ax1.plot(crypto['Historical Dates'], crypto['Historical Prices'], color='tab:blue')
-                    ax1.set_xlabel('Date')
-                    ax1.set_ylabel('Price (USD)', color='tab:blue')
-                    ax1.tick_params(axis='y', labelcolor='tab:blue')
+                    # Price trace
+                    fig.add_trace(
+                        go.Scatter(
+                            x=crypto['Historical Dates'],
+                            y=crypto['Historical Prices'],
+                            name='Price',
+                            line=dict(color='#1f77b4')
+                        ),
+                        row=1, col=1
+                    )
                     
-                    # Add RSI if available
+                    # RSI trace if available
                     if crypto['RSI (14)']:
-                        ax2 = ax1.twinx()
                         rsi_values = RSIIndicator(pd.Series(crypto['Historical Prices']), window=14).rsi()
-                        ax2.plot(crypto['Historical Dates'], rsi_values, color='tab:orange', alpha=0.3)
-                        ax2.axhline(70, color='red', linestyle='--', alpha=0.3)
-                        ax2.axhline(30, color='green', linestyle='--', alpha=0.3)
-                        ax2.set_ylabel('RSI', color='tab:orange')
-                        ax2.tick_params(axis='y', labelcolor='tab:orange')
+                        fig.add_trace(
+                            go.Scatter(
+                                x=crypto['Historical Dates'],
+                                y=rsi_values,
+                                name='RSI (14)',
+                                line=dict(color='#ff7f0e')
+                            ),
+                            row=2, col=1
+                        )
+                        # Add RSI reference lines
+                        fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
+                        fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
                     
-                    plt.title(f"{crypto['Symbol']} Price and RSI")
-                    st.pyplot(fig)
+                    # Update layout
+                    fig.update_layout(
+                        height=600,
+                        title_text=f"{crypto['Symbol']} Price and RSI",
+                        hovermode="x unified"
+                    )
+                    
+                    # Update y-axes titles
+                    fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
+                    if crypto['RSI (14)']:
+                        fig.update_yaxes(title_text="RSI", row=2, col=1)
+                    
+                    st.plotly_chart(fig, use_container_width=True)
                     
                     # MACD chart if available
                     if crypto['MACD'] and crypto['MACD Signal']:
-                        fig2, ax = plt.subplots(figsize=(10, 3))
                         macd_values = MACD(pd.Series(crypto['Historical Prices'])).macd()
                         signal_values = MACD(pd.Series(crypto['Historical Prices'])).macd_signal()
                         
-                        ax.plot(crypto['Historical Dates'], macd_values, label='MACD', color='blue')
-                        ax.plot(crypto['Historical Dates'], signal_values, label='Signal', color='orange')
-                        ax.axhline(0, color='gray', linestyle='--')
-                        ax.set_title('MACD Indicator')
-                        ax.legend()
-                        st.pyplot(fig2)
+                        macd_fig = go.Figure()
+                        macd_fig.add_trace(
+                            go.Scatter(
+                                x=crypto['Historical Dates'],
+                                y=macd_values,
+                                name='MACD',
+                                line=dict(color='blue')
+                            )
+                        )
+                        macd_fig.add_trace(
+                            go.Scatter(
+                                x=crypto['Historical Dates'],
+                                y=signal_values,
+                                name='Signal',
+                                line=dict(color='orange')
+                            )
+                        )
+                        macd_fig.add_hline(y=0, line_dash="dot", line_color="gray")
+                        
+                        macd_fig.update_layout(
+                            height=300,
+                            title_text="MACD Indicator",
+                            hovermode="x unified"
+                        )
+                        
+                        st.plotly_chart(macd_fig, use_container_width=True)
         
         else:
             st.warning("No valid cryptocurrency data found. Please check your symbols.")
