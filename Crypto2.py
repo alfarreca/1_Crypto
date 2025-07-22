@@ -19,7 +19,6 @@ COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
 DEFAULT_COINS = ["bitcoin", "ethereum", "solana", "cardano", "ripple"]
 DEFAULT_CURRENCY = "usd"
 
-# Cache data to prevent excessive API calls
 @st.cache_data(ttl=60)
 def get_coin_list():
     try:
@@ -62,10 +61,10 @@ def get_market_data(coin_ids, currency):
         st.error("Failed to fetch after 3 retries.")
         return []
 
-    for i in range(0, len(coin_ids), 8):  # smaller batches = safer
-        batch = coin_ids[i:i + 8]
+    for i in range(0, len(coin_ids), 5):  # batch size = 5
+        batch = coin_ids[i:i + 5]
         results.extend(fetch_batch(batch))
-        time.sleep(1.5)  # pause between batches
+        time.sleep(5)  # slower delay between batches
 
     return results
 
@@ -74,10 +73,7 @@ def get_historical_data(coin_id, currency, days):
     try:
         response = requests.get(
             f"{COINGECKO_API_URL}/coins/{coin_id}/market_chart",
-            params={
-                "vs_currency": currency,
-                "days": days
-            }
+            params={"vs_currency": currency, "days": days}
         )
         response.raise_for_status()
         return response.json()
