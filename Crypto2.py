@@ -55,14 +55,15 @@ def get_market_data_cmc(symbols, convert="USD"):
                 quote = coin["quote"][convert]
                 results.append({
                     "Coin": f"{coin['name']} ({symbol})",
-                    "Price": f"{quote['price']:,.2f} {convert}",
+                    "Price": f"{quote.get('price', 0):,.2f} {convert}",
                     "1h": f"{quote.get('percent_change_1h', 0):.2f}%",
                     "24h": f"{quote.get('percent_change_24h', 0):.2f}%",
                     "7d": f"{quote.get('percent_change_7d', 0):.2f}%",
-                    "Market Cap": f"{quote['market_cap']:,.0f}",
-                    "24h Volume": f"{quote['volume_24h']:,.0f}"
+                    "Market Cap": f"{quote.get('market_cap', 0):,.0f}",
+                    "24h Volume": f"{quote.get('volume_24h', 0):,.0f}"
                 })
-            except KeyError:
+            except Exception as e:
+                st.warning(f"⚠️ Failed to parse CMC data for {symbol}: {e}")
                 continue
     return results
 
