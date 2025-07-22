@@ -1,336 +1,251 @@
 import streamlit as st
 import pandas as pd
+import requests
+import matplotlib.pyplot as plt
 import numpy as np
-import yfinance as yf
-import plotly.graph_objects as go
+from io import BytesIO
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
-from datetime import datetime, timedelta
-import time
-from io import BytesIO
 
-# App configuration
-st.set_page_config(
-    page_title="Crypto Price Action Tracker",
-    page_icon="📈",
-    layout="wide"
-)
+# CoinMarketCap API configuration
+API_KEY = "f356e3d4-dd08-437d-bcc9-edbb0fc65b22"
+BASE_URL = "https://pro-api.coinmarketcap.com/v1/"
 
-# Custom CSS for better styling
-st.markdown("""
-    <style>
-    .main {
-        max-width: 1200px;
-    }
-    .stDownloadButton, .stFileUploader {
-        width: 100%;
-    }
-    .metric-card {
-        border-radius: 10px;
-        padding: 15px;
-        margin: 5px 0;
-        background-color: #1e2130;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    .positive {
-        color: #00ff00;
-    }
-    .negative {
-        color: #ff0000;
-    }
-    .header {
-        color: #ffffff;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# App title
-st.title("📈 Crypto Price Action Tracker")
-st.markdown("Track cryptocurrency prices, momentum scores, and technical indicators (RSI & MACD)")
+# Configure Streamlit app
+st.set_page_config(page_title="Crypto Price Tracker", layout="wide")
+st.title("Cryptocurrency Price Action & Momentum Tracker")
 
 # Sidebar for user inputs
 with st.sidebar:
-    st.header("Settings")
-    
-    # Date range selection
-    date_range = st.selectbox(
-        "Date Range",
-        ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y"],
-        index=2
-    )
-    
-    # Interval selection
-    interval = st.selectbox(
-        "Interval",
-        ["1m", "5m", "15m", "30m", "1h", "1d", "1wk"],
-        index=5
-    )
-    
-    # Sample file download
-    st.markdown("### Sample Crypto List")
-    sample_data = pd.DataFrame({"Symbol": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "DOT-USD"]})
-    excel_buffer = BytesIO()
-    sample_data.to_excel(excel_buffer, index=False)
-    st.download_button(
-        label="Download Sample File",
-        data=excel_buffer.getvalue(),
-        file_name="crypto_sample.xlsx",
-        mime="application/vnd.ms-excel"
-    )
+    st.header("Configuration")
+    uploaded_file = st.file_uploader("Upload Excel file with crypto symbols", type=["xlsx"])
+    days = st.slider("Number of days for analysis", min_value=1, max_value=90, value=30)
+    update_button = st.button("Update Data")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload Excel file with crypto symbols", type=["xlsx"])
-
-# Function to calculate momentum score
-def calculate_momentum_score(data):
-    if len(data) < 2:
-        return 0
+# Function to fetch crypto data
+def get_crypto_data(symbols, days):
+    crypto_data = []
     
-    # Simple momentum calculation (can be enhanced)
-    price_change = (data['Close'].iloc[-1] - data['Close'].iloc[-2]) / data['Close'].iloc[-2] * 100
-    volume_change = (data['Volume'].iloc[-1] - data['Volume'].iloc[-2]) / data['Volume'].iloc[-2] * 100 if data['Volume'].iloc[-2] != 0 else 0
-    
-    # Weighted score
-    momentum_score = (price_change * 0.7) + (volume_change * 0.3)
-    return momentum_score
-
-# Function to fetch data and calculate indicators
-def get_crypto_data(symbol, period, interval):
-    try:
-        # Add '-USD' if not present (assuming USD pairs)
-        if not symbol.endswith('-USD'):
-            symbol += '-USD'
+    for symbol in symbols:
+        try:
+            # Get latest quotes
+            quote_url = f"{BASE_URL}cryptocurrency/quotes/latest"
+            quote_params = {
+                'symbol': symbol,
+                'convert': 'USD'
+            }
+            quote_headers = {
+                'Accepts': 'application/json',
+                'X-CMC_PRO_API_KEY': API_KEY
+            }
             
-        # Get data from Yahoo Finance
-        data = yf.download(
-            tickers=symbol,
-            period=period,
-            interval=interval,
-            progress=False
-        )
-        
-        if data.empty:
-            return None
+            quote_response = requests.get(quote_url, headers=quote_headers, params=quote_params)
+            quote_data = quote_response.json()
             
-        # Calculate RSI
-        rsi_indicator = RSIIndicator(close=data['Close'], window=14)
-        data['RSI'] = rsi_indicator.rsi()
-        
-        # Calculate MACD
-        macd_indicator = MACD(close=data['Close'])
-        data['MACD'] = macd_indicator.macd()
-        data['Signal'] = macd_indicator.macd_signal()
-        
-        # Calculate Momentum Score
-        momentum_score = calculate_momentum_score(data)
-        
-        return data, momentum_score
-        
-    except Exception as e:
-        st.error(f"Error fetching data for {symbol}: {str(e)}")
-        return None
+            # Get historical data
+            historical_url = f"{BASE_URL}cryptocurrency/quotes/historical"
+            historical_params = {
+                'symbol': symbol,
+                'convert': 'USD',
+                'count': days,
+                'interval': 'daily'
+            }
+            historical_headers = {
+                'Accepts': 'application/json',
+                'X-CMC_PRO_API_KEY': API_KEY
+            }
+            
+            historical_response = requests.get(historical_url, headers=historical_headers, params=historical_params)
+            historical_data = historical_response.json()
+            
+            if 'data' in quote_data and 'data' in historical_data:
+                # Process current data
+                current_data = quote_data['data'][symbol][0]
+                
+                # Process historical data
+                historical_prices = [item['quote']['USD']['price'] for item in historical_data['data']]
+                historical_dates = [item['timestamp'] for item in historical_data['data']]
+                
+                # Calculate metrics
+                if len(historical_prices) >= 14:  # Minimum for RSI
+                    rsi_indicator = RSIIndicator(pd.Series(historical_prices), window=14)
+                    rsi = rsi_indicator.rsi().iloc[-1]
+                    
+                    macd_indicator = MACD(pd.Series(historical_prices))
+                    macd = macd_indicator.macd().iloc[-1]
+                    macd_signal = macd_indicator.macd_signal().iloc[-1]
+                    
+                    # Momentum score (custom calculation)
+                    price_change_1d = ((current_data['quote']['USD']['price'] - historical_prices[-1]) / historical_prices[-1]) * 100
+                    price_change_7d = ((current_data['quote']['USD']['price'] - historical_prices[-7]) / historical_prices[-7]) * 100
+                    price_change_30d = ((current_data['quote']['USD']['price'] - historical_prices[-min(30, len(historical_prices))]) / historical_prices[-min(30, len(historical_prices))]) * 100
+                    
+                    momentum_score = 0.4 * price_change_1d + 0.3 * price_change_7d + 0.3 * price_change_30d
+                else:
+                    rsi = None
+                    macd = None
+                    macd_signal = None
+                    momentum_score = None
+                
+                crypto_data.append({
+                    'Symbol': symbol,
+                    'Name': current_data['name'],
+                    'Price (USD)': current_data['quote']['USD']['price'],
+                    'Market Cap': current_data['quote']['USD']['market_cap'],
+                    '24h Change (%)': current_data['quote']['USD']['percent_change_24h'],
+                    '7d Change (%)': current_data['quote']['USD']['percent_change_7d'],
+                    'RSI (14)': rsi,
+                    'MACD': macd,
+                    'MACD Signal': macd_signal,
+                    'Momentum Score': momentum_score,
+                    'Historical Prices': historical_prices,
+                    'Historical Dates': historical_dates
+                })
+                
+        except Exception as e:
+            st.warning(f"Error fetching data for {symbol}: {str(e)}")
+            continue
+    
+    return crypto_data
 
-# Function to create price chart with indicators
-def create_price_chart(data, symbol):
-    fig = go.Figure()
+# Function to calculate technical indicators
+def calculate_technical_indicators(prices):
+    if len(prices) < 14:
+        return None, None, None
     
-    # Price line
-    fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data['Close'],
-        name='Price',
-        line=dict(color='#00ff00', width=2)
-    ))
+    # Convert to pandas Series
+    price_series = pd.Series(prices)
     
-    # Layout
-    fig.update_layout(
-        title=f"{symbol} Price Chart",
-        xaxis_title="Date",
-        yaxis_title="Price (USD)",
-        template="plotly_dark",
-        height=400,
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
+    # Calculate RSI
+    rsi_indicator = RSIIndicator(price_series, window=14)
+    rsi = rsi_indicator.rsi().iloc[-1]
     
-    return fig
-
-# Function to create RSI chart
-def create_rsi_chart(data, symbol):
-    fig = go.Figure()
+    # Calculate MACD
+    macd_indicator = MACD(price_series)
+    macd = macd_indicator.macd().iloc[-1]
+    macd_signal = macd_indicator.macd_signal().iloc[-1]
     
-    # RSI line
-    fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data['RSI'],
-        name='RSI',
-        line=dict(color='#ff9900', width=2)
-    ))
-    
-    # Overbought line
-    fig.add_hline(y=70, line_dash="dot", line_color="red", annotation_text="Overbought (70)")
-    
-    # Oversold line
-    fig.add_hline(y=30, line_dash="dot", line_color="green", annotation_text="Oversold (30)")
-    
-    # Layout
-    fig.update_layout(
-        title=f"{symbol} RSI (14)",
-        xaxis_title="Date",
-        yaxis_title="RSI Value",
-        template="plotly_dark",
-        height=300,
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
-    
-    return fig
-
-# Function to create MACD chart
-def create_macd_chart(data, symbol):
-    fig = go.Figure()
-    
-    # MACD line
-    fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data['MACD'],
-        name='MACD',
-        line=dict(color='#00ff00', width=2)
-    ))
-    
-    # Signal line
-    fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data['Signal'],
-        name='Signal',
-        line=dict(color='#ff0000', width=2)
-    ))
-    
-    # Layout
-    fig.update_layout(
-        title=f"{symbol} MACD",
-        xaxis_title="Date",
-        yaxis_title="MACD Value",
-        template="plotly_dark",
-        height=300,
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
-    
-    return fig
+    return rsi, macd, macd_signal
 
 # Main app logic
 if uploaded_file is not None:
     try:
-        # Read the uploaded file
+        # Read symbols from Excel file
         df = pd.read_excel(uploaded_file)
+        symbols = df.iloc[:, 0].astype(str).unique().tolist()
         
-        # Check if 'Symbol' column exists
-        if 'Symbol' not in df.columns:
-            st.error("The uploaded file must contain a 'Symbol' column with cryptocurrency symbols.")
-            st.stop()
-            
-        # Get unique symbols
-        symbols = df['Symbol'].unique()
+        if update_button or not st.session_state.get('crypto_data'):
+            with st.spinner("Fetching crypto data..."):
+                crypto_data = get_crypto_data(symbols, days)
+                st.session_state['crypto_data'] = crypto_data
+        else:
+            crypto_data = st.session_state.get('crypto_data', [])
         
-        # Display progress and status
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # Create tabs for each crypto
-        tabs = st.tabs([f"{symbol}" for symbol in symbols])
-        
-        # Initialize results dataframe
-        results = pd.DataFrame(columns=['Symbol', 'Current Price', '24h Change', 'Momentum Score', 'RSI', 'MACD Signal'])
-        
-        # Process each symbol
-        for i, (symbol, tab) in enumerate(zip(symbols, tabs)):
-            status_text.text(f"Fetching data for {symbol} ({i+1}/{len(symbols)})...")
-            progress_bar.progress((i + 1) / len(symbols))
+        if crypto_data:
+            # Display summary table
+            st.subheader("Cryptocurrency Metrics Summary")
+            summary_data = []
             
-            # Get data
-            result = get_crypto_data(symbol, date_range, interval)
+            for crypto in crypto_data:
+                summary_data.append({
+                    'Symbol': crypto['Symbol'],
+                    'Price (USD)': f"${crypto['Price (USD)']:,.2f}",
+                    '24h Change (%)': f"{crypto['24h Change (%)']:.2f}%",
+                    '7d Change (%)': f"{crypto['7d Change (%)']:.2f}%",
+                    'RSI (14)': f"{crypto['RSI (14)']:.2f}" if crypto['RSI (14)'] else "N/A",
+                    'MACD': f"{crypto['MACD']:.4f}" if crypto['MACD'] else "N/A",
+                    'Momentum Score': f"{crypto['Momentum Score']:.2f}" if crypto['Momentum Score'] else "N/A"
+                })
             
-            if result is None:
-                with tab:
-                    st.error(f"Could not fetch data for {symbol}")
-                continue
-                
-            data, momentum_score = result
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(summary_df, use_container_width=True)
             
-            # Calculate metrics
-            current_price = data['Close'].iloc[-1]
-            prev_price = data['Close'].iloc[-2] if len(data) > 1 else current_price
-            price_change = (current_price - prev_price) / prev_price * 100
-            rsi = data['RSI'].iloc[-1]
-            macd_signal = "Bullish" if data['MACD'].iloc[-1] > data['Signal'].iloc[-1] else "Bearish"
-            
-            # Add to results
-            results.loc[i] = [
-                symbol,
-                current_price,
-                price_change,
-                momentum_score,
-                rsi,
-                macd_signal
-            ]
-            
-            # Display in tab
-            with tab:
-                col1, col2, col3 = st.columns(3)
+            # Display charts for each cryptocurrency
+            for crypto in crypto_data:
+                st.divider()
+                col1, col2 = st.columns([1, 3])
                 
                 with col1:
-                    st.markdown(f"<div class='metric-card'><h3 class='header'>Price</h3><h2>${current_price:,.2f}</h2></div>", unsafe_allow_html=True)
+                    st.subheader(f"{crypto['Name']} ({crypto['Symbol']})")
+                    st.metric("Current Price", f"${crypto['Price (USD)']:,.2f}")
                     
+                    # Display key metrics
+                    st.write(f"**24h Change:** {crypto['24h Change (%)']:.2f}%")
+                    st.write(f"**7d Change:** {crypto['7d Change (%)']:.2f}%")
+                    
+                    if crypto['RSI (14)']:
+                        st.write(f"**RSI (14):** {crypto['RSI (14)']:.2f}")
+                        if crypto['RSI (14)'] > 70:
+                            st.warning("Overbought (RSI > 70)")
+                        elif crypto['RSI (14)'] < 30:
+                            st.info("Oversold (RSI < 30)")
+                    
+                    if crypto['MACD'] and crypto['MACD Signal']:
+                        st.write(f"**MACD:** {crypto['MACD']:.4f}")
+                        st.write(f"**MACD Signal:** {crypto['MACD Signal']:.4f}")
+                        if crypto['MACD'] > crypto['MACD Signal']:
+                            st.success("Bullish (MACD > Signal)")
+                        else:
+                            st.error("Bearish (MACD < Signal)")
+                    
+                    if crypto['Momentum Score']:
+                        st.write(f"**Momentum Score:** {crypto['Momentum Score']:.2f}")
+                
                 with col2:
-                    change_class = "positive" if price_change >= 0 else "negative"
-                    st.markdown(f"<div class='metric-card'><h3 class='header'>24h Change</h3><h2 class='{change_class}'>{price_change:.2f}%</h2></div>", unsafe_allow_html=True)
+                    # Price chart
+                    fig, ax1 = plt.subplots(figsize=(10, 4))
                     
-                with col3:
-                    mom_class = "positive" if momentum_score >= 0 else "negative"
-                    st.markdown(f"<div class='metric-card'><h3 class='header'>Momentum Score</h3><h2 class='{mom_class}'>{momentum_score:.2f}</h2></div>", unsafe_allow_html=True)
-                
-                # Charts
-                st.plotly_chart(create_price_chart(data, symbol), use_container_width=True)
-                
-                col4, col5 = st.columns(2)
-                with col4:
-                    st.plotly_chart(create_rsi_chart(data, symbol), use_container_width=True)
-                
-                with col5:
-                    st.plotly_chart(create_macd_chart(data, symbol), use_container_width=True)
-                
-                # Raw data
-                with st.expander("Show Raw Data"):
-                    st.dataframe(data.tail(10))
+                    # Plot price
+                    ax1.plot(crypto['Historical Dates'], crypto['Historical Prices'], color='tab:blue')
+                    ax1.set_xlabel('Date')
+                    ax1.set_ylabel('Price (USD)', color='tab:blue')
+                    ax1.tick_params(axis='y', labelcolor='tab:blue')
+                    
+                    # Add RSI if available
+                    if crypto['RSI (14)']:
+                        ax2 = ax1.twinx()
+                        rsi_values = RSIIndicator(pd.Series(crypto['Historical Prices']), window=14).rsi()
+                        ax2.plot(crypto['Historical Dates'], rsi_values, color='tab:orange', alpha=0.3)
+                        ax2.axhline(70, color='red', linestyle='--', alpha=0.3)
+                        ax2.axhline(30, color='green', linestyle='--', alpha=0.3)
+                        ax2.set_ylabel('RSI', color='tab:orange')
+                        ax2.tick_params(axis='y', labelcolor='tab:orange')
+                    
+                    plt.title(f"{crypto['Symbol']} Price and RSI")
+                    st.pyplot(fig)
+                    
+                    # MACD chart if available
+                    if crypto['MACD'] and crypto['MACD Signal']:
+                        fig2, ax = plt.subplots(figsize=(10, 3))
+                        macd_values = MACD(pd.Series(crypto['Historical Prices'])).macd()
+                        signal_values = MACD(pd.Series(crypto['Historical Prices'])).macd_signal()
+                        
+                        ax.plot(crypto['Historical Dates'], macd_values, label='MACD', color='blue')
+                        ax.plot(crypto['Historical Dates'], signal_values, label='Signal', color='orange')
+                        ax.axhline(0, color='gray', linestyle='--')
+                        ax.set_title('MACD Indicator')
+                        ax.legend()
+                        st.pyplot(fig2)
         
-        # Display summary table
-        st.header("Cryptocurrency Summary")
-        
-        # Style the dataframe
-        def color_positive_negative(val):
-            color = 'green' if val >= 0 else 'red'
-            return f'color: {color}'
-        
-        styled_results = results.style.applymap(color_positive_negative, subset=['24h Change', 'Momentum Score'])
-        st.dataframe(styled_results)
-        
-        # Download results
-        excel_buffer = BytesIO()
-        results.to_excel(excel_buffer, index=False)
-        st.download_button(
-            label="Download Results as Excel",
-            data=excel_buffer.getvalue(),
-            file_name="crypto_results.xlsx",
-            mime="application/vnd.ms-excel"
-        )
-        
+        else:
+            st.warning("No valid cryptocurrency data found. Please check your symbols.")
+    
     except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
+        st.error(f"Error processing file: {str(e)}")
 else:
-    st.info("Please upload an Excel file with cryptocurrency symbols to get started.")
+    st.info("Please upload an Excel file containing cryptocurrency symbols to get started.")
 
-# Add a refresh button
-if st.button("Refresh Data"):
-    st.experimental_rerun()
-
-# Footer
-st.markdown("---")
-st.markdown("Built with Streamlit • Data from Yahoo Finance")
+# Add some styling
+st.markdown("""
+<style>
+    .stMetric {
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+    .stDataFrame {
+        font-size: 0.9em;
+    }
+</style>
+""", unsafe_allow_html=True)
