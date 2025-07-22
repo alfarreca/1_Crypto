@@ -4,8 +4,8 @@ import plotly.express as px
 import requests
 from datetime import datetime
 import time
-import io
 import random
+import io
 
 # App configuration
 st.set_page_config(
@@ -14,295 +14,144 @@ st.set_page_config(
     layout="wide"
 )
 
-# API configuration
+# API constants
+CMC_API_URL = "https://pro-api.coinmarketcap.com/v1"
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
-DEFAULT_COINS = ["bitcoin", "ethereum", "solana", "cardano", "ripple"]
-DEFAULT_CURRENCY = "usd"
+DEFAULT_COINS = ["BTC", "ETH", "SOL", "ADA", "XRP"]
+DEFAULT_CURRENCY = "USD"
 
-@st.cache_data(ttl=60)
-def get_coin_list():
-    try:
-        response = requests.get(f"{COINGECKO_API_URL}/coins/list")
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching coin list: {e}")
-        return []
+# Load API key from secrets
+CMC_API_KEY = st.secrets.get("CMC_API_KEY", "")
 
+# Utility to retry and handle rate limits
+def safe_request(url, headers=None, params=None, max_attempts=3, delay=1.5):
+    for attempt in range(max_attempts):
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 429:
+                wait = 2 ** attempt + random.random()
+                st.warning(f"Rate limit hit. Retrying in {wait:.1f}s...")
+                time.sleep(wait)
+            else:
+                raise e
+        except Exception as e:
+            st.error(f"Request failed: {e}")
+            return None
+    return None
+
+# Market Data - CoinMarketCap (primary)
 @st.cache_data(ttl=180)
-def get_market_data(coin_ids, currency):
+def get_market_data_cmc(symbols, convert="USD"):
+    headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
+    params = {"symbol": ",".join(symbols), "convert": convert}
+    data = safe_request(f"{CMC_API_URL}/cryptocurrency/quotes/latest", headers, params)
     results = []
-
-    def fetch_batch(ids):
-        for attempt in range(3):  # Retry up to 3 times
-            try:
-                response = requests.get(
-                    f"{COINGECKO_API_URL}/coins/markets",
-                    params={
-                        "vs_currency": currency,
-                        "ids": ",".join(ids),
-                        "order": "market_cap_desc",
-                        "price_change_percentage": "1h,24h,7d"
-                    },
-                    timeout=10
-                )
-                response.raise_for_status()
-                return response.json()
-            except requests.exceptions.HTTPError as e:
-                if response.status_code == 429:
-                    wait = 2 ** attempt + random.random()
-                    st.warning(f"Rate limit hit. Retrying in {wait:.1f}s...")
-                    time.sleep(wait)
-                else:
-                    raise e
-            except Exception as e:
-                st.error(f"Unexpected error: {e}")
-                return []
-        st.error("Failed to fetch after 3 retries.")
-        return []
-
-    for i in range(0, len(coin_ids), 5):  # batch size = 5
-        batch = coin_ids[i:i + 5]
-        results.extend(fetch_batch(batch))
-        time.sleep(5)  # slower delay between batches
-
+    try:
+        for symbol in symbols:
+            coin = data["data"][symbol]
+            quote = coin["quote"][convert]
+            results.append({
+                "Coin": f"{coin['name']} ({symbol})",
+                "Price": f"{quote['price']:,.2f} {convert}",
+                "1h": f"{quote.get('percent_change_1h', 0):.2f}%",
+                "24h": f"{quote.get('percent_change_24h', 0):.2f}%",
+                "7d": f"{quote.get('percent_change_7d', 0):.2f}%",
+                "Market Cap": f"{quote['market_cap']:,.0f}",
+                "24h Volume": f"{quote['volume_24h']:,.0f}"
+            })
+    except:
+        return None  # fallback will kick in
     return results
 
-@st.cache_data(ttl=300)
-def get_historical_data(coin_id, currency, days):
-    try:
-        response = requests.get(
-            f"{COINGECKO_API_URL}/coins/{coin_id}/market_chart",
-            params={"vs_currency": currency, "days": days}
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching historical data: {e}")
-        return None
+# Market Data - Fallback to CoinGecko
+@st.cache_data(ttl=180)
+def get_market_data_gecko(symbols, currency="usd"):
+    coin_map = {
+        "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "ADA": "cardano",
+        "XRP": "ripple", "DOT": "polkadot", "LINK": "chainlink", "AVAX": "avalanche"
+    }
+    ids = [coin_map.get(s, "").lower() for s in symbols if coin_map.get(s)]
+    results = []
 
-@st.cache_data(ttl=3600)
-def get_top_gainers(currency="usd", limit=20):
-    try:
-        response = requests.get(
-            f"{COINGECKO_API_URL}/coins/markets",
-            params={
-                "vs_currency": currency,
-                "order": "price_change_percentage_24h_desc",
-                "per_page": limit,
-                "page": 1,
-                "sparkline": False,
-                "price_change_percentage": "24h"
-            }
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching top gainers: {e}")
-        return []
+    for i in range(0, len(ids), 5):
+        batch = ",".join(ids[i:i+5])
+        params = {
+            "vs_currency": currency.lower(),
+            "ids": batch,
+            "order": "market_cap_desc",
+            "price_change_percentage": "1h,24h,7d"
+        }
+        r = safe_request(f"{COINGECKO_API_URL}/coins/markets", params=params)
+        if r:
+            for c in r:
+                results.append({
+                    "Coin": f"{c['name']} ({c['symbol'].upper()})",
+                    "Price": f"{c['current_price']:,.2f} {currency}",
+                    "1h": f"{c.get('price_change_percentage_1h_in_currency', 0):.2f}%",
+                    "24h": f"{c.get('price_change_percentage_24h_in_currency', 0):.2f}%",
+                    "7d": f"{c.get('price_change_percentage_7d_in_currency', 0):.2f}%",
+                    "Market Cap": f"{c['market_cap']:,.0f}",
+                    "24h Volume": f"{c['total_volume']:,.0f}"
+                })
+    return results
 
-def rerun_after_delay():
-    time.sleep(1)
-    st.rerun()
-
-def create_template_file():
-    top_gainers = get_top_gainers(st.session_state.currency)
-    if not top_gainers:
-        return None
-
-    df = pd.DataFrame([{
-        "coin_id": coin["id"],
-        "name": coin["name"],
-        "symbol": coin["symbol"],
-        "24h_change": coin["price_change_percentage_24h"],
-        "current_price": coin["current_price"],
-        "market_cap": coin["market_cap"]
-    } for coin in top_gainers])
-
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Top Gainers')
-        worksheet = writer.sheets['Top Gainers']
-        workbook = writer.book
-
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'top',
-            'fg_color': '#4F81BD',
-            'font_color': 'white',
-            'border': 1
-        })
-
-        for col_num, value in enumerate(df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-            col_len = max(df[value].astype(str).map(len).max(), len(value)) + 2
-            worksheet.set_column(col_num, col_num, col_len)
-
-    output.seek(0)
-    return output
-
-# Initialize session state
+# UI state
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = DEFAULT_COINS.copy()
 if 'currency' not in st.session_state:
     st.session_state.currency = DEFAULT_CURRENCY
 
-# App layout
-st.title("📈 Crypto Price Tracker")
-st.write("Real-time cryptocurrency price tracking using CoinGecko API")
+# Layout
+st.title("📊 Crypto Price Tracker (CMC + Fallback)")
+st.markdown("Real-time crypto prices using [CoinMarketCap](https://coinmarketcap.com/api/)")
 
-# Sidebar controls
+# Sidebar
 with st.sidebar:
-    st.header("Settings")
-
-    currencies = ["usd", "eur", "gbp", "jpy", "btc", "eth"]
-    st.session_state.currency = st.selectbox(
-        "Select Currency",
-        currencies,
-        index=currencies.index(st.session_state.currency)
-    )
-
-    st.subheader("Manage Watchlist")
-    all_coins = get_coin_list()
-    coin_names = {coin['id']: coin['name'] for coin in all_coins}
-
-    st.subheader("Import Watchlist")
-    uploaded_file = st.file_uploader("Upload XLSX file", type="xlsx")
-
-    if uploaded_file:
-        try:
-            df = pd.read_excel(uploaded_file)
-            if 'coin_id' in df.columns:
-                new_coins = df['coin_id'].dropna().unique().tolist()
-                st.session_state.watchlist = list(set(st.session_state.watchlist + new_coins))
-                st.success(f"Added {len(new_coins)} coins from file")
-                rerun_after_delay()
-            else:
-                st.error("File must contain a 'coin_id' column")
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
-
-    st.subheader("Get Top Gainers Template")
-    if st.button("Download Top 20 Gainers Template"):
-        template_file = create_template_file()
-        if template_file:
-            st.download_button(
-                label="Download XLSX Template",
-                data=template_file,
-                file_name=f"top_20_gainers_{datetime.now().date()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        else:
-            st.error("Could not generate template file")
-
-    st.subheader("Manual Watchlist Editing")
-    new_coin = st.selectbox(
-        "Add Cryptocurrency",
-        [""] + sorted([coin['id'] for coin in all_coins], key=lambda x: coin_names[x].lower())
-    )
-
-    if st.button("Add to Watchlist") and new_coin:
-        if new_coin not in st.session_state.watchlist:
-            st.session_state.watchlist.append(new_coin)
-            st.success(f"Added {coin_names.get(new_coin, new_coin)} to watchlist")
-            rerun_after_delay()
-
+    st.header("⚙️ Settings")
+    st.session_state.currency = st.selectbox("Select Currency", ["USD", "EUR", "GBP", "JPY"], index=0)
+    st.subheader("Watchlist")
+    new_coin = st.text_input("Add Coin Symbol (e.g., BTC, ETH)").upper()
+    if st.button("Add") and new_coin and new_coin not in st.session_state.watchlist:
+        st.session_state.watchlist.append(new_coin)
     if st.session_state.watchlist:
-        st.write("Current Watchlist:")
-        for coin in st.session_state.watchlist.copy():
-            cols = st.columns([4, 1])
-            cols[0].write(f"- {coin_names.get(coin, coin)}")
-            if cols[1].button("×", key=f"remove_{coin}"):
+        for coin in st.session_state.watchlist:
+            col1, col2 = st.columns([4, 1])
+            col1.write(f"- {coin}")
+            if col2.button("🗑", key=f"rm_{coin}"):
                 st.session_state.watchlist.remove(coin)
-                st.success(f"Removed {coin_names.get(coin, coin)} from watchlist")
-                rerun_after_delay()
+                st.rerun()
 
-# Main content
-if not st.session_state.watchlist:
-    st.warning("Your watchlist is empty. Add some cryptocurrencies from the sidebar.")
+# Fetch market data
+symbols = st.session_state.watchlist
+currency = st.session_state.currency.upper()
+
+with st.spinner("Loading market data..."):
+    data = get_market_data_cmc(symbols, currency)
+    if not data:
+        st.warning("CoinMarketCap data unavailable. Falling back to CoinGecko.")
+        data = get_market_data_gecko(symbols, currency.lower())
+
+if not data:
+    st.error("Failed to fetch data from both APIs.")
 else:
-    if len(st.session_state.watchlist) > 15:
-        st.warning("⚠️ You have more than 15 coins in your watchlist. Requests are batched with retry logic to avoid rate limits. This may slow loading.")
+    df = pd.DataFrame(data)
 
-    market_data = get_market_data(st.session_state.watchlist, st.session_state.currency)
+    def color_change(val):
+        try:
+            color = 'red' if float(val.replace('%', '')) < 0 else 'green'
+            return f'color: {color}'
+        except:
+            return ""
 
-    if market_data:
-        st.subheader("Current Prices")
-
-        display_data = []
-        for coin in market_data:
-            display_data.append({
-                "Coin": f"{coin['name']} ({coin['symbol'].upper()})",
-                "Price": f"{coin['current_price']:,.2f} {st.session_state.currency.upper()}",
-                "1h": f"{coin.get('price_change_percentage_1h_in_currency', 0):.2f}%",
-                "24h": f"{coin.get('price_change_percentage_24h_in_currency', 0):.2f}%",
-                "7d": f"{coin.get('price_change_percentage_7d_in_currency', 0):.2f}%",
-                "Market Cap": f"{coin['market_cap']:,.0f}",
-                "24h Volume": f"{coin['total_volume']:,.0f}"
-            })
-
-        df = pd.DataFrame(display_data)
-
-        def color_change(val):
-            try:
-                color = 'red' if float(val.replace('%', '')) < 0 else 'green'
-                return f'color: {color}'
-            except:
-                return ""
-
-        styled_df = df.style.applymap(color_change, subset=['1h', '24h', '7d'])
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-        st.subheader("Price History")
-        col1, col2 = st.columns(2)
-        selected_coin = col1.selectbox(
-            "Select Coin",
-            [coin['id'] for coin in market_data],
-            format_func=lambda x: next(c['name'] for c in market_data if c['id'] == x)
-        )
-        time_period = col2.selectbox("Time Period", ["1 Day", "7 Days", "30 Days"], index=1)
-        days_map = {"1 Day": 1, "7 Days": 7, "30 Days": 30}
-        days = days_map[time_period]
-
-        historical_data = get_historical_data(selected_coin, st.session_state.currency, days)
-
-        if historical_data and 'prices' in historical_data:
-            df_history = pd.DataFrame(historical_data['prices'], columns=['timestamp', 'price'])
-            df_history['date'] = pd.to_datetime(df_history['timestamp'], unit='ms')
-
-            fig = px.line(
-                df_history,
-                x='date',
-                y='price',
-                title=f"{next(c['name'] for c in market_data if c['id'] == selected_coin)} Price History ({time_period})",
-                labels={'price': f'Price ({st.session_state.currency.upper()})', 'date': 'Date'}
-            )
-
-            fig.update_layout(
-                hovermode="x unified",
-                showlegend=False,
-                xaxis_title=None,
-                yaxis_title=f"Price ({st.session_state.currency.upper()})",
-                margin=dict(l=0, r=0, t=40, b=0)
-            )
-
-            fig.update_traces(
-                hovertemplate="%{y:,.2f} " + st.session_state.currency.upper(),
-                line=dict(width=2)
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("Could not load historical price data.")
-    else:
-        st.warning("Could not load current market data. Please try again later.")
+    styled_df = df.style.applymap(color_change, subset=['1h', '24h', '7d'])
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 # Footer
 st.markdown("---")
 st.markdown(
-    f"""
-    **Data Source:** [CoinGecko API](https://www.coingecko.com/en/api)  
-    **Last Updated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    """
+    f"📡 Data from [CoinMarketCap](https://coinmarketcap.com/api/) and [CoinGecko](https://coingecko.com)<br>⏱ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    unsafe_allow_html=True
 )
