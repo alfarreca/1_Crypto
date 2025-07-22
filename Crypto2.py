@@ -36,13 +36,14 @@ def safe_request(url, headers=None, params=None, max_attempts=3, delay=1.5):
                 st.warning(f"Rate limit hit. Retrying in {wait:.1f}s...")
                 time.sleep(wait)
             else:
+                st.error(f"HTTP Error {response.status_code}: {response.text}")
                 raise e
         except Exception as e:
-            st.error(f"Request failed: {e}")
+            st.error(f"Unexpected error: {e}")
             return None
     return None
 
-# Market Data - CoinMarketCap (primary)
+# Market Data - CoinMarketCap
 @st.cache_data(ttl=180)
 def get_market_data_cmc(symbols, convert="USD"):
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
@@ -63,17 +64,17 @@ def get_market_data_cmc(symbols, convert="USD"):
                 "24h Volume": f"{quote['volume_24h']:,.0f}"
             })
     except:
-        return None  # fallback will kick in
+        return None
     return results
 
-# Market Data - Fallback to CoinGecko
+# Fallback to CoinGecko
 @st.cache_data(ttl=180)
 def get_market_data_gecko(symbols, currency="usd"):
     coin_map = {
         "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "ADA": "cardano",
         "XRP": "ripple", "DOT": "polkadot", "LINK": "chainlink", "AVAX": "avalanche"
     }
-    ids = [coin_map.get(s, "").lower() for s in symbols if coin_map.get(s)]
+    ids = [coin_map.get(s.upper(), "") for s in symbols if s.upper() in coin_map]
     results = []
 
     for i in range(0, len(ids), 5):
@@ -98,44 +99,61 @@ def get_market_data_gecko(symbols, currency="usd"):
                 })
     return results
 
-# UI state
+# App state
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = DEFAULT_COINS.copy()
 if 'currency' not in st.session_state:
     st.session_state.currency = DEFAULT_CURRENCY
 
-# Layout
+# Header
 st.title("📊 Crypto Price Tracker (CMC + Fallback)")
-st.markdown("Real-time crypto prices using [CoinMarketCap](https://coinmarketcap.com/api/)")
+st.markdown("Real-time prices from [CoinMarketCap](https://coinmarketcap.com/api) with automatic fallback to CoinGecko.")
 
-# Sidebar
+# Sidebar controls
 with st.sidebar:
     st.header("⚙️ Settings")
-    st.session_state.currency = st.selectbox("Select Currency", ["USD", "EUR", "GBP", "JPY"], index=0)
-    st.subheader("Watchlist")
-    new_coin = st.text_input("Add Coin Symbol (e.g., BTC, ETH)").upper()
+    st.session_state.currency = st.selectbox("Currency", ["USD", "EUR", "GBP", "JPY"], index=0)
+
+    st.subheader("📥 Import Watchlist")
+    uploaded_file = st.file_uploader("Upload XLSX file", type=["xlsx"])
+    if uploaded_file:
+        try:
+            df = pd.read_excel(uploaded_file)
+            if "symbol" in df.columns:
+                symbols = df["symbol"].dropna().str.upper().unique().tolist()
+                st.session_state.watchlist = list(set(st.session_state.watchlist + symbols))
+                st.success(f"✅ Imported {len(symbols)} symbols.")
+                st.rerun()
+            else:
+                st.error("❌ File must contain a 'symbol' column.")
+        except Exception as e:
+            st.error(f"Failed to read file: {e}")
+
+    st.subheader("🔧 Manage Watchlist")
+    new_coin = st.text_input("Add Symbol (e.g., BTC, ETH)").upper()
     if st.button("Add") and new_coin and new_coin not in st.session_state.watchlist:
         st.session_state.watchlist.append(new_coin)
-    if st.session_state.watchlist:
-        for coin in st.session_state.watchlist:
-            col1, col2 = st.columns([4, 1])
-            col1.write(f"- {coin}")
-            if col2.button("🗑", key=f"rm_{coin}"):
-                st.session_state.watchlist.remove(coin)
-                st.rerun()
+        st.rerun()
 
-# Fetch market data
+    for coin in st.session_state.watchlist.copy():
+        col1, col2 = st.columns([4, 1])
+        col1.write(f"- {coin}")
+        if col2.button("🗑", key=f"rm_{coin}"):
+            st.session_state.watchlist.remove(coin)
+            st.rerun()
+
+# Load market data
 symbols = st.session_state.watchlist
 currency = st.session_state.currency.upper()
 
-with st.spinner("Loading market data..."):
+with st.spinner("🔄 Loading market data..."):
     data = get_market_data_cmc(symbols, currency)
     if not data:
-        st.warning("CoinMarketCap data unavailable. Falling back to CoinGecko.")
+        st.warning("⚠️ CoinMarketCap API failed. Falling back to CoinGecko.")
         data = get_market_data_gecko(symbols, currency.lower())
 
 if not data:
-    st.error("Failed to fetch data from both APIs.")
+    st.error("❌ Failed to load market data from both APIs.")
 else:
     df = pd.DataFrame(data)
 
@@ -152,6 +170,6 @@ else:
 # Footer
 st.markdown("---")
 st.markdown(
-    f"📡 Data from [CoinMarketCap](https://coinmarketcap.com/api/) and [CoinGecko](https://coingecko.com)<br>⏱ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-    unsafe_allow_html=True
+    f"📡 Data from [CoinMarketCap](https://coinmarketcap.com/api) & [CoinGecko](https://coingecko.com)  \n"
+    f"🕒 Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 )
