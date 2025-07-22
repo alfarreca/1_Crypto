@@ -294,3 +294,4 @@ st.markdown(
     **Data Source:** [CoinGecko API](https://www.coingecko.com/en/api)  
     **Last Updated:** {}
     """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+)
