@@ -28,11 +28,11 @@ def get_crypto_data(symbols, days):
     crypto_data = []
     invalid_symbols = []
     
-    for i, symbol in enumerate(symbols[:max_coins]):  # Respect max_coins limit
+    for i, symbol in enumerate(symbols[:max_coins]):
         try:
             # Rate limiting
             if i > 0 and i % 5 == 0:
-                time.sleep(1)  # Pause to avoid API rate limits
+                time.sleep(1)
             
             # Get latest quotes
             quote_url = f"{BASE_URL}cryptocurrency/quotes/latest"
@@ -67,23 +67,20 @@ def get_crypto_data(symbols, days):
             rsi, macd, macd_signal, momentum_score = None, None, None, None
             
             if len(historical_prices) >= 14:
-                # RSI Calculation
                 rsi_indicator = RSIIndicator(pd.Series(historical_prices), window=14)
                 rsi = rsi_indicator.rsi().iloc[-1]
                 
-                # MACD Calculation
                 macd_indicator = MACD(pd.Series(historical_prices))
                 macd = macd_indicator.macd().iloc[-1]
                 macd_signal = macd_indicator.macd_signal().iloc[-1]
                 
-                # Momentum Score (weighted average)
+                # Momentum calculation
                 changes = [
-                    ((historical_prices[-1] - historical_prices[-2]) / historical_prices[-2]) * 100 if len(historical_prices) >= 2 else 0,
-                    ((historical_prices[-1] - historical_prices[-7]) / historical_prices[-7]) * 100 if len(historical_prices) >= 7 else 0,
-                    ((historical_prices[-1] - historical_prices[-min(30, len(historical_prices))]) / 
-                     historical_prices[-min(30, len(historical_prices))]) * 100
+                    ((historical_prices[-1] - historical_prices[-2])/historical_prices[-2])*100 if len(historical_prices)>=2 else 0,
+                    ((historical_prices[-1] - historical_prices[-7])/historical_prices[-7])*100 if len(historical_prices)>=7 else 0,
+                    ((historical_prices[-1] - historical_prices[-min(30,len(historical_prices))])/historical_prices[-min(30,len(historical_prices))])*100
                 ]
-                momentum_score = sum(w * c for w, c in zip([0.5, 0.3, 0.2], changes))
+                momentum_score = sum(w*c for w,c in zip([0.5,0.3,0.2], changes))
             
             crypto_data.append({
                 'Symbol': symbol,
@@ -121,22 +118,16 @@ if uploaded_file is not None:
                 symbol_col = col
                 break
                 
-        if symbol_col:
-            symbols = df[symbol_col].astype(str).str.strip().str.upper().unique().tolist()
-        else:
-            symbols = df.iloc[:, 0].astype(str).str.strip().str.upper().unique().tolist()
-        
-        # Filter valid symbols
+        symbols = df[symbol_col].astype(str).str.strip().str.upper().unique().tolist() if symbol_col else df.iloc[:,0].astype(str).str.strip().str.upper().unique().tolist()
         symbols = [s for s in symbols if s.isalpha() and len(s) <= 10]
         
         if not symbols:
-            st.error("❌ No valid cryptocurrency symbols found in the file.")
+            st.error("❌ No valid cryptocurrency symbols found")
         else:
             st.success(f"✅ Found {len(symbols)} valid symbols")
-            st.write(f"Analyzing first {min(max_coins, len(symbols))} coins...")
             
             if update_button or not st.session_state.get('crypto_data'):
-                with st.spinner("🔍 Fetching crypto data (this may take a minute)..."):
+                with st.spinner("🔍 Fetching data..."):
                     crypto_data = get_crypto_data(symbols, days)
                     st.session_state['crypto_data'] = crypto_data
             else:
@@ -155,46 +146,29 @@ if uploaded_file is not None:
                     'Momentum': f"{x['Momentum Score']:.1f}" if x['Momentum Score'] else "-"
                 } for x in crypto_data])
                 
-                st.dataframe(summary_df.style.applymap(
-                    lambda x: 'color: green' if isinstance(x, str) and '-' not in x and float(x.replace('%','').replace('$','').replace(',','')) > 0 
-                    else 'color: red' if isinstance(x, str) and '-' not in x and float(x.replace('%','').replace('$','').replace(',','')) < 0 
-                    else '', subset=['24h %', '7d %', 'Momentum']),
-                    use_container_width=True, height=(len(crypto_data) + 1) * 35 + 3)
+                st.dataframe(summary_df, use_container_width=True)
                 
                 # Display detailed charts
                 for crypto in crypto_data:
                     st.divider()
-                    
                     col1, col2 = st.columns([1, 3])
+                    
                     with col1:
                         st.subheader(f"{crypto['Name']} ({crypto['Symbol']})")
-                        
-                        # Price metrics
                         delta_color = "inverse" if crypto['24h Change (%)'] < 0 else "normal"
-                        st.metric("Current Price", 
+                        st.metric("Price", 
                                  f"${crypto['Price (USD)']:,.2f}", 
                                  f"{crypto['24h Change (%)']:.2f}%",
                                  delta_color=delta_color)
                         
-                        # Indicator cards
-                        cols = st.columns(2)
-                        with cols[0]:
-                            st.metric("7d Change", f"{crypto['7d Change (%)']:.2f}%")
-                        with cols[1]:
-                            st.metric("Momentum", 
-                                     f"{crypto['Momentum Score']:.1f}" if crypto['Momentum Score'] else "N/A",
-                                     help="Weighted score of 1d/7d/30d performance")
+                        st.metric("7d Change", f"{crypto['7d Change (%)']:.2f}%")
+                        st.metric("Momentum", 
+                                 f"{crypto['Momentum Score']:.1f}" if crypto['Momentum Score'] else "N/A")
                         
-                        # RSI indicator
                         if crypto['RSI (14)']:
-                            rsi_status = ""
-                            if crypto['RSI (14)'] > 70:
-                                rsi_status = "🔴 Overbought"
-                            elif crypto['RSI (14)'] < 30:
-                                rsi_status = "🟢 Oversold"
+                            rsi_status = "🔴 Overbought" if crypto['RSI (14)'] > 70 else "🟢 Oversold" if crypto['RSI (14)'] < 30 else ""
                             st.metric("RSI (14)", f"{crypto['RSI (14)']:.1f}", rsi_status)
                         
-                        # MACD indicator
                         if crypto['MACD'] and crypto['MACD Signal']:
                             macd_status = "🟢 Bullish" if crypto['MACD'] > crypto['MACD Signal'] else "🔴 Bearish"
                             st.metric("MACD", 
@@ -204,9 +178,8 @@ if uploaded_file is not None:
                     with col2:
                         # Price + RSI chart
                         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                           vertical_spacing=0.05, row_heights=[0.7, 0.3])
+                                         vertical_spacing=0.05, row_heights=[0.7, 0.3])
                         
-                        # Price trace
                         fig.add_trace(
                             go.Scatter(
                                 x=crypto['Historical Dates'],
@@ -218,7 +191,6 @@ if uploaded_file is not None:
                             row=1, col=1
                         )
                         
-                        # RSI trace
                         if crypto['RSI (14)']:
                             rsi_values = RSIIndicator(pd.Series(crypto['Historical Prices']), window=14).rsi()
                             fig.add_trace(
@@ -270,27 +242,23 @@ if uploaded_file is not None:
                                 title="MACD Indicator",
                                 hovermode="x unified",
                                 margin=dict(t=50, b=50)
-                            )
                             st.plotly_chart(macd_fig, use_container_width=True)
             
             else:
-                st.warning("No valid cryptocurrency data could be fetched.")
+                st.warning("No data could be fetched")
     
     except Exception as e:
         st.error(f"Error: {str(e)}")
 else:
-    st.info("ℹ️ Please upload an Excel file with cryptocurrency symbols to begin analysis.")
+    st.info("ℹ️ Please upload an Excel file to begin")
 
-# Add some styling
+# CSS styling
 st.markdown("""
 <style>
     .stMetric {
         border-radius: 8px;
         padding: 12px;
         background-color: #f0f2f6;
-    }
-    .stDataFrame {
-        font-size: 0.9em;
     }
     div[data-testid="stHorizontalBlock"] {
         gap: 1rem;
