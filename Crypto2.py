@@ -155,5 +155,143 @@ with st.sidebar:
         try:
             df = pd.read_excel(uploaded_file)
             if 'coin_id' in df.columns:
-                new_coins = df['coin_id'].dropna
-
+                new_coins = df['coin_id'].dropna().unique().tolist()
+                st.session_state.watchlist = list(set(st.session_state.watchlist + new_coins))
+                st.success(f"Added {len(new_coins)} coins from file")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("File must contain a 'coin_id' column")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+    
+    st.subheader("Get Top Gainers Template")
+    if st.button("Download Top 20 Gainers Template"):
+        template_file = create_template_file()
+        if template_file:
+            st.download_button(
+                label="Download XLSX Template",
+                data=template_file,
+                file_name=f"top_20_gainers_{datetime.now().date()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.error("Could not generate template file")
+    
+    st.subheader("Manual Watchlist Editing")
+    new_coin = st.selectbox(
+        "Add Cryptocurrency",
+        [""] + sorted([coin['id'] for coin in all_coins], key=lambda x: coin_names[x].lower())
+    )
+    
+    if st.button("Add to Watchlist") and new_coin:
+        if new_coin not in st.session_state.watchlist:
+            st.session_state.watchlist.append(new_coin)
+            st.success(f"Added {coin_names.get(new_coin, new_coin)} to watchlist")
+            time.sleep(1)
+            st.rerun()
+    
+    if st.session_state.watchlist:
+        st.write("Current Watchlist:")
+        for coin in st.session_state.watchlist.copy():
+            cols = st.columns([4, 1])
+            cols[0].write(f"- {coin_names.get(coin, coin)}")
+            if cols[1].button("×", key=f"remove_{coin}"):
+                st.session_state.watchlist.remove(coin)
+                st.success(f"Removed {coin_names.get(coin, coin)} from watchlist")
+                time.sleep(1)
+                st.rerun()
+
+# Main content
+if not st.session_state.watchlist:
+    st.warning("Your watchlist is empty. Add some cryptocurrencies from the sidebar.")
+else:
+    market_data = get_market_data(st.session_state.watchlist, st.session_state.currency)
+    
+    if market_data:
+        st.subheader("Current Prices")
+        
+        display_data = []
+        for coin in market_data:
+            display_data.append({
+                "Coin": f"{coin['name']} ({coin['symbol'].upper()})",
+                "Price": f"{coin['current_price']:,.2f} {st.session_state.currency.upper()}",
+                "1h": f"{coin['price_change_percentage_1h_in_currency'] or 0:.2f}%",
+                "24h": f"{coin['price_change_percentage_24h_in_currency'] or 0:.2f}%",
+                "7d": f"{coin['price_change_percentage_7d_in_currency'] or 0:.2f}%",
+                "Market Cap": f"{coin['market_cap']:,.0f}",
+                "24h Volume": f"{coin['total_volume']:,.0f}"
+            })
+        
+        df = pd.DataFrame(display_data)
+        
+        def color_change(val):
+            color = 'red' if float(val.replace('%', '')) < 0 else 'green'
+            return f'color: {color}'
+        
+        styled_df = df.style.applymap(color_change, subset=['1h', '24h', '7d'])
+        
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        st.subheader("Price History")
+        
+        col1, col2 = st.columns(2)
+        selected_coin = col1.selectbox(
+            "Select Coin",
+            [coin['id'] for coin in market_data],
+            format_func=lambda x: next(c['name'] for c in market_data if c['id'] == x)
+        )
+        time_period = col2.selectbox(
+            "Time Period",
+            ["1 Day", "7 Days", "30 Days"],
+            index=1
+        )
+        
+        days_map = {"1 Day": 1, "7 Days": 7, "30 Days": 30}
+        days = days_map[time_period]
+        
+        historical_data = get_historical_data(selected_coin, st.session_state.currency, days)
+        
+        if historical_data and 'prices' in historical_data:
+            df_history = pd.DataFrame(historical_data['prices'], columns=['timestamp', 'price'])
+            df_history['date'] = pd.to_datetime(df_history['timestamp'], unit='ms')
+            
+            fig = px.line(
+                df_history,
+                x='date',
+                y='price',
+                title=f"{next(c['name'] for c in market_data if c['id'] == selected_coin)} Price History ({time_period})",
+                labels={'price': f'Price ({st.session_state.currency.upper()})', 'date': 'Date'}
+            )
+            
+            fig.update_layout(
+                hovermode="x unified",
+                showlegend=False,
+                xaxis_title=None,
+                yaxis_title=f"Price ({st.session_state.currency.upper()})",
+                margin=dict(l=0, r=0, t=40, b=0)
+            )
+            
+            fig.update_traces(
+                hovertemplate="%{y:,.2f} " + st.session_state.currency.upper(),
+                line=dict(width=2)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Could not load historical price data.")
+    else:
+        st.warning("Could not load current market data. Please try again later.")
+
+# Footer
+st.markdown("---")
+st.markdown(
+    """
+    **Data Source:** [CoinGecko API](https://www.coingecko.com/en/api)  
+    **Last Updated:** {}
+    """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+)
