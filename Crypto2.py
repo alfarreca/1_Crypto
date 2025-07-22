@@ -1,3 +1,5 @@
+# Crypto Tracker: CoinMarketCap API with CoinGecko fallback
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -5,163 +7,133 @@ import time
 import random
 from datetime import datetime
 
-st.set_page_config("Crypto Tracker", layout="wide")
-
+# --- API Settings ---
 CMC_API_URL = "https://pro-api.coinmarketcap.com/v1"
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
-CMC_API_KEY = st.secrets.get("CMC_API_KEY", "")
+CMC_API_KEY = st.secrets["CMC_API_KEY"]
+MAX_SYMBOLS_PER_BATCH = 10
 
-DEFAULT_COINS = ["BTC", "ETH", "SOL", "ADA", "XRP"]
-DEFAULT_CURRENCY = "USD"
-
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = DEFAULT_COINS.copy()
-if "currency" not in st.session_state:
-    st.session_state.currency = DEFAULT_CURRENCY
-
-def safe_request(url, headers=None, params=None, max_attempts=3):
+# --- Helper: Retryable Request ---
+def safe_request(url, headers=None, params=None, max_attempts=3, timeout=10):
     for attempt in range(max_attempts):
         try:
-            r = requests.get(url, headers=headers, params=params, timeout=10)
+            r = requests.get(url, headers=headers, params=params, timeout=timeout)
             if r.status_code == 429:
                 wait = 2 ** attempt + random.random()
                 st.warning(f"Rate limit hit. Retrying in {wait:.1f}s...")
                 time.sleep(wait)
+                continue
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            if attempt == max_attempts - 1:
-                st.error(f"API request failed: {e}")
+            st.warning(f"Request failed: {e}")
             time.sleep(2)
     return None
 
-@st.cache_data(ttl=180)
+# --- Fetch CMC Data ---
 def get_market_data_cmc(symbols, convert="USD"):
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-    results = []
-    for i in range(0, len(symbols), 5):
-        batch = symbols[i:i + 5]
+    all_data = []
+    for i in range(0, len(symbols), MAX_SYMBOLS_PER_BATCH):
+        batch = symbols[i:i + MAX_SYMBOLS_PER_BATCH]
         params = {"symbol": ",".join(batch), "convert": convert}
-        res = safe_request(f"{CMC_API_URL}/cryptocurrency/quotes/latest", headers=headers, params=params)
-        if not res or "data" not in res:
-            return None
+        response = safe_request(f"{CMC_API_URL}/cryptocurrency/quotes/latest", headers, params)
+        if not response or "data" not in response:
+            continue
         for symbol in batch:
             try:
-                coin = res["data"][symbol]
-                quote = coin["quote"][convert]
-                results.append({
-                    "Coin": f"{coin.get('name', 'Unknown')} ({symbol})",
-                    "Price": format_number(quote.get("price"), convert),
-                    "1h": format_percent(quote.get("percent_change_1h")),
-                    "24h": format_percent(quote.get("percent_change_24h")),
-                    "7d": format_percent(quote.get("percent_change_7d")),
-                    "Market Cap": format_number(quote.get("market_cap")),
-                    "24h Volume": format_number(quote.get("volume_24h")),
+                coin_data = response["data"].get(symbol, {})
+                quote = coin_data.get("quote", {}).get(convert, {})
+                all_data.append({
+                    "Coin": f"{coin_data.get('name', '')} ({symbol})",
+                    "Price": f"{quote['price']:,.2f} {convert}" if quote.get("price") is not None else "-",
+                    "1h": f"{quote.get('percent_change_1h', 0):.2f}%",
+                    "24h": f"{quote.get('percent_change_24h', 0):.2f}%",
+                    "7d": f"{quote.get('percent_change_7d', 0):.2f}%",
+                    "Market Cap": f"{quote.get('market_cap', 0):,.0f}",
+                    "24h Volume": f"{quote.get('volume_24h', 0):,.0f}"
                 })
             except Exception as e:
                 st.warning(f"⚠️ Failed to parse CMC data for {symbol}: {e}")
-    return results
+    return all_data
 
-@st.cache_data(ttl=180)
-def get_market_data_gecko(symbols, currency="usd"):
-    coin_map = {
+# --- Fetch CoinGecko Fallback ---
+def get_market_data_gecko(symbols, vs_currency="usd"):
+    mapping = {
         "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "ADA": "cardano",
-        "XRP": "ripple", "DOT": "polkadot", "LINK": "chainlink", "AVAX": "avalanche",
-        "FTM": "fantom", "NEAR": "near", "GRT": "the-graph", "ARB": "arbitrum",
-        "MATIC": "polygon", "SUI": "sui", "PEPE": "pepe", "ATOM": "cosmos",
-        "FET": "fetch-ai", "UNI": "uniswap", "DOGE": "dogecoin"
+        "XRP": "ripple", "DOT": "polkadot", "LINK": "chainlink", "SUI": "sui",
+        "ARB": "arbitrum", "AVAX": "avalanche-2", "ATOM": "cosmos", "FET": "fetch-ai",
+        "MATIC": "polygon", "GRT": "the-graph", "NEAR": "near", "PEPE": "pepe",
+        "DOGE": "dogecoin", "UNI": "uniswap", "AR": "arweave"
     }
-    ids = [coin_map.get(s.upper(), "") for s in symbols if s.upper() in coin_map]
-    results = []
-
-    for i in range(0, len(ids), 5):
+    ids = [mapping.get(sym.upper(), sym.lower()) for sym in symbols]
+    all_data = []
+    for i in range(0, len(ids), MAX_SYMBOLS_PER_BATCH):
+        batch = ids[i:i + MAX_SYMBOLS_PER_BATCH]
         params = {
-            "vs_currency": currency,
-            "ids": ",".join(ids[i:i + 5]),
-            "order": "market_cap_desc",
+            "vs_currency": vs_currency,
+            "ids": ",".join(batch),
             "price_change_percentage": "1h,24h,7d"
         }
-        r = safe_request(f"{COINGECKO_API_URL}/coins/markets", params=params)
-        if r:
-            for c in r:
-                results.append({
-                    "Coin": f"{c['name']} ({c['symbol'].upper()})",
-                    "Price": format_number(c.get("current_price"), currency),
-                    "1h": format_percent(c.get("price_change_percentage_1h_in_currency")),
-                    "24h": format_percent(c.get("price_change_percentage_24h_in_currency")),
-                    "7d": format_percent(c.get("price_change_percentage_7d_in_currency")),
-                    "Market Cap": format_number(c.get("market_cap")),
-                    "24h Volume": format_number(c.get("total_volume")),
-                })
-    return results
+        response = safe_request(f"{COINGECKO_API_URL}/coins/markets", params=params)
+        if not response:
+            continue
+        for coin in response:
+            all_data.append({
+                "Coin": f"{coin['name']} ({coin['symbol'].upper()})",
+                "Price": f"{coin['current_price']:,.2f} {vs_currency.upper()}",
+                "1h": f"{coin.get('price_change_percentage_1h_in_currency', 0):.2f}%",
+                "24h": f"{coin.get('price_change_percentage_24h_in_currency', 0):.2f}%",
+                "7d": f"{coin.get('price_change_percentage_7d_in_currency', 0):.2f}%",
+                "Market Cap": f"{coin.get('market_cap', 0):,.0f}",
+                "24h Volume": f"{coin.get('total_volume', 0):,.0f}"
+            })
+    return all_data
 
-def format_number(value, suffix=""):
+# --- Streamlit UI ---
+st.set_page_config("Crypto Tracker (CMC + Fallback)")
+st.title("📈 Crypto Tracker (CMC + Fallback)")
+st.markdown("Powered by [CoinMarketCap](https://coinmarketcap.com) with automatic fallback to CoinGecko.")
+
+currency = st.selectbox("Currency", ["USD", "EUR", "GBP"], index=0)
+uploaded_file = st.file_uploader("📤 Import XLSX with 'symbol' column", type=["xlsx"])
+default_watchlist = ["BTC", "ETH", "SOL", "ADA", "XRP"]
+
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = default_watchlist.copy()
+
+# Upload XLSX
+if uploaded_file:
     try:
-        return f"{value:,.2f} {suffix}" if value is not None else "N/A"
-    except:
-        return "N/A"
+        df = pd.read_excel(uploaded_file)
+        if "symbol" in df.columns:
+            st.session_state.watchlist = df["symbol"].dropna().str.upper().unique().tolist()
+            st.success("✅ Watchlist updated.")
+        else:
+            st.error("❌ No 'symbol' column found.")
+    except Exception as e:
+        st.error(f"❌ File error: {e}")
 
-def format_percent(value):
-    try:
-        return f"{value:.2f}%" if value is not None else "N/A"
-    except:
-        return "N/A"
+# Add Symbol
+new_symbol = st.text_input("Add to Watchlist", placeholder="e.g., BTC, ETH")
+if st.button("Add") and new_symbol:
+    st.session_state.watchlist.append(new_symbol.upper())
 
-with st.sidebar:
-    st.header("⚙️ Settings")
-    st.session_state.currency = st.selectbox("Currency", ["USD", "EUR", "GBP", "JPY"], index=0)
+# Show Watchlist
+st.sidebar.write("### Watchlist")
+for s in st.session_state.watchlist:
+    st.sidebar.markdown(f"- {s}")
 
-    st.subheader("📥 Import Watchlist")
-    file = st.file_uploader("Upload XLSX with 'symbol' column", type=["xlsx"])
-    if file:
-        try:
-            df = pd.read_excel(file)
-            if "symbol" in df.columns:
-                imported = df["symbol"].dropna().str.upper().unique().tolist()
-                st.session_state.watchlist = list(set(st.session_state.watchlist + imported))
-                st.success(f"✅ Imported {len(imported)} symbols.")
-                st.rerun()
-            else:
-                st.error("❌ Excel must contain a column named 'symbol'.")
-        except Exception as e:
-            st.error(f"Failed to read Excel: {e}")
-
-    st.subheader("➕ Add to Watchlist")
-    new_coin = st.text_input("Symbol (e.g., BTC)").upper()
-    if st.button("Add") and new_coin:
-        st.session_state.watchlist.append(new_coin)
-        st.rerun()
-
-    for coin in st.session_state.watchlist.copy():
-        col1, col2 = st.columns([4, 1])
-        col1.write(f"- {coin}")
-        if col2.button("🗑", key=f"rm_{coin}"):
-            st.session_state.watchlist.remove(coin)
-            st.rerun()
-
-symbols = st.session_state.watchlist
-currency = st.session_state.currency.upper()
-
-st.title("📊 Crypto Tracker (CMC + Fallback)")
-st.markdown("Powered by [CoinMarketCap](https://coinmarketcap.com/api) with automatic fallback to CoinGecko.")
-
-with st.spinner("Fetching live prices..."):
-    data = get_market_data_cmc(symbols, currency)
+# Fetch Data
+with st.spinner("Fetching data..."):
+    data = get_market_data_cmc(st.session_state.watchlist, currency.upper())
     if not data:
-        st.warning("⚠️ CMC failed. Trying CoinGecko...")
-        data = get_market_data_gecko(symbols, currency.lower())
+        st.warning("⚠️ CMC API failed. Using CoinGecko fallback.")
+        data = get_market_data_gecko(st.session_state.watchlist, currency.lower())
 
-if not data:
-    st.error("❌ No data returned from either API.")
-else:
-    df = pd.DataFrame(data)
-
-    def color_pct(val):
-        try:
-            return "color: green" if float(val.replace('%', '')) > 0 else "color: red"
-        except:
-            return ""
-
-    st.dataframe(df.style.applymap(color_pct, subset=["1h", "24h", "7d"]), use_container_width=True)
-
-    st.markdown(f"🕒 Last updated: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`")
+    if data:
+        df = pd.DataFrame(data)
+        st.dataframe(df, use_container_width=True)
+        st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    else:
+        st.error("❌ Could not fetch data from either source.")
