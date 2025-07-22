@@ -7,7 +7,7 @@ import time
 import random
 
 # --- Config ---
-CMC_API_KEY = st.secrets["CMC_API_KEY"]
+CMC_API_KEY = st.secrets.get("CMC_API_KEY", None)
 CMC_API_URL = "https://pro-api.coinmarketcap.com/v1"
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
 MAX_SYMBOLS_PER_BATCH = 10
@@ -109,7 +109,7 @@ for coin in market_data:
 
 if momentum_data:
     df_momentum = pd.DataFrame(momentum_data).sort_values("Momentum Score", ascending=False).reset_index(drop=True)
-    st.dataframe(df_momentum.style.background_gradient(subset=["Momentum Score"], cmap='RdYlGn'), use_container_width=True)
+    st.dataframe(df_momentum, use_container_width=True)
 
 # --- Charts ---
 st.subheader("📈 30-Day Price Action")
@@ -124,4 +124,3 @@ for coin in market_data:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No historical data available.")
-
