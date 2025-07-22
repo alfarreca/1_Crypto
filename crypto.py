@@ -19,7 +19,7 @@ DEFAULT_COINS = ["bitcoin", "ethereum", "solana", "cardano", "ripple"]
 DEFAULT_CURRENCY = "usd"
 
 # Cache data to prevent excessive API calls
-@st.cache_data(ttl=60)  # Cache for 60 seconds
+@st.cache_data(ttl=60)
 def get_coin_list():
     try:
         response = requests.get(f"{COINGECKO_API_URL}/coins/list")
@@ -64,7 +64,7 @@ def get_historical_data(coin_id, currency, days):
         st.error(f"Error fetching historical data: {e}")
         return None
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour since this is for template
+@st.cache_data(ttl=3600)
 def get_top_gainers(currency="usd", limit=20):
     try:
         response = requests.get(
@@ -103,7 +103,6 @@ def create_template_file():
         df.to_excel(writer, index=False, sheet_name='Top Gainers')
         worksheet = writer.sheets['Top Gainers']
         
-        # Add some formatting
         header_format = writer.book.add_format({
             'bold': True,
             'text_wrap': True,
@@ -116,7 +115,6 @@ def create_template_file():
         for col_num, value in enumerate(df.columns.values):
             worksheet.write(0, col_num, value, header_format)
         
-        # Auto-adjust columns' width
         for i, col in enumerate(df.columns):
             max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
             worksheet.set_column(i, i, max_len)
@@ -139,7 +137,6 @@ st.write("Real-time cryptocurrency price tracking using CoinGecko API")
 with st.sidebar:
     st.header("Settings")
     
-    # Currency selection
     currencies = ["usd", "eur", "gbp", "jpy", "btc", "eth"]
     st.session_state.currency = st.selectbox(
         "Select Currency",
@@ -147,12 +144,10 @@ with st.sidebar:
         index=currencies.index(st.session_state.currency)
     )
     
-    # Watchlist management
     st.subheader("Manage Watchlist")
     all_coins = get_coin_list()
     coin_names = {coin['id']: coin['name'] for coin in all_coins}
     
-    # Upload XLSX file
     st.subheader("Import Watchlist")
     uploaded_file = st.file_uploader("Upload XLSX file", type="xlsx")
     
@@ -170,7 +165,6 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Error reading file: {e}")
     
-    # Download template
     st.subheader("Get Top Gainers Template")
     if st.button("Download Top 20 Gainers Template"):
         template_file = create_template_file()
@@ -184,7 +178,6 @@ with st.sidebar:
         else:
             st.error("Could not generate template file")
     
-    # Manual watchlist editing
     st.subheader("Manual Watchlist Editing")
     new_coin = st.selectbox(
         "Add Cryptocurrency",
@@ -213,14 +206,11 @@ with st.sidebar:
 if not st.session_state.watchlist:
     st.warning("Your watchlist is empty. Add some cryptocurrencies from the sidebar.")
 else:
-    # Get market data
     market_data = get_market_data(st.session_state.watchlist, st.session_state.currency)
     
     if market_data:
-        # Display current prices
         st.subheader("Current Prices")
         
-        # Prepare data for display
         display_data = []
         for coin in market_data:
             display_data.append({
@@ -235,7 +225,6 @@ else:
         
         df = pd.DataFrame(display_data)
         
-        # Style the DataFrame
         def color_change(val):
             color = 'red' if float(val.replace('%', '')) < 0 else 'green'
             return f'color: {color}'
@@ -248,7 +237,6 @@ else:
             hide_index=True
         )
         
-        # Price charts
         st.subheader("Price History")
         
         col1, col2 = st.columns(2)
@@ -269,11 +257,9 @@ else:
         historical_data = get_historical_data(selected_coin, st.session_state.currency, days)
         
         if historical_data and 'prices' in historical_data:
-            # Process historical data
             df_history = pd.DataFrame(historical_data['prices'], columns=['timestamp', 'price'])
             df_history['date'] = pd.to_datetime(df_history['timestamp'], unit='ms')
             
-            # Create chart
             fig = px.line(
                 df_history,
                 x='date',
@@ -282,7 +268,6 @@ else:
                 labels={'price': f'Price ({st.session_state.currency.upper()})', 'date': 'Date'}
             )
             
-            # Customize chart
             fig.update_layout(
                 hovermode="x unified",
                 showlegend=False,
@@ -302,7 +287,7 @@ else:
     else:
         st.warning("Could not load current market data. Please try again later.")
 
-# Footer
+# Corrected footer
 st.markdown("---")
 st.markdown(
     """
