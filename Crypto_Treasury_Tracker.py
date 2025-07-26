@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import plotly.express as px
+from io import BytesIO
 
 # --- CoinGecko API endpoints ---
 API_URL = "https://api.coingecko.com/api/v3/simple/price"
@@ -21,7 +22,7 @@ data = [
     {"Name": "Volcon Inc.", "Symbol": "VCNX", "Token": "Bitcoin", "Holdings ($M)": 500, "Market Cap ($M)": 700},
     {"Name": "Sequans Communications", "Symbol": "SQNS", "Token": "Bitcoin", "Holdings ($M)": 384, "Market Cap ($M)": 250},
     {"Name": "Trump Media & Technology Group", "Symbol": "TMGT", "Token": "Bitcoin", "Holdings ($M)": 2000, "Market Cap ($M)": 5000},
-    {"Name": "Hype Treasury Co.", "Symbol": "HYPECO", "Token": "Hype", "Holdings ($M)": 305, "Market Cap ($M)": 1000}  # Manual token
+    {"Name": "Hype Treasury Co.", "Symbol": "HYPECO", "Token": "Hype", "Holdings ($M)": 305, "Market Cap ($M)": 1000}
 ]
 
 df = pd.DataFrame(data)
@@ -89,10 +90,14 @@ fig_pie = px.pie(
 )
 st.plotly_chart(fig_pie, use_container_width=True)
 
-# Optionally allow Excel export
+# --- Excel Export ---
+excel_buffer = BytesIO()
+df.to_excel(excel_buffer, index=False, engine='openpyxl')
+excel_buffer.seek(0)
+
 st.download_button(
     label="📥 Download Excel",
-    data=df.to_excel(index=False, engine='openpyxl'),
+    data=excel_buffer,
     file_name="Crypto_Treasury_Valuation_Tracker.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
